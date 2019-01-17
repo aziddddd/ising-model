@@ -1,5 +1,4 @@
 FROM jupyter/minimal-notebook:latest
-
+ADD . /notebooks
 WORKDIR /notebooks
-
-CMD jupyter notebook --port=8888
+RUN pip install -r requirements.txt
