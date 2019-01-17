@@ -1,0 +1,8 @@
+version: '3'
+services: 
+  jupyter:
+    ports: 
+    - '8888:8888'
+    volumes:
+    - C:/Users/Azid/GitHub/ising-model/notebooks:/notebooks
+    build: .
