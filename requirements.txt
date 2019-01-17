@@ -1,2 +1,6 @@
 numpy
 scipy
+widgetsnbextension
+matplotlib
+tqdm
+numba
