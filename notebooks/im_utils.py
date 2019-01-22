@@ -35,12 +35,18 @@ class Ising():
 ################################################## METHOD ########################################################
 
     # def Kawasaki():
-        # Choose randomly 2 dinstinct sites i & j
+    #     for i in range(self.N):
+    #         for j in range(self.N):
+    #             # Choose randomly 2 dinstinct sites i & j
+    #             row_i, col_i    = np.random.randint(0, self.N), np.random.randint(0, self.N)
+    #             row_j, col_j    = np.random.randint(0, self.N), np.random.randint(0, self.N)
+
+    #             i, j            = self.config[row_i, col_i], self.config[row_j, col_j]
 
         # Consider the effect of exchanging this pair of spins
 
-        # If E is decreased, the exchange is made with P = 1
-        # Else, the exchange is made with P = exp(-∆E/kT)
+                # If E is decreased, the exchange is made with P = 1
+                 # Else, the exchange is made with P = exp(-∆E/kT)
 
         # Algorithm for computing E given lattices i and j.
 
@@ -52,20 +58,20 @@ class Ising():
             for j in range(self.N):
                 # Choose a site i at random
                 row, col    = np.random.randint(0, self.N), np.random.randint(0, self.N)
-                i           = self.config[row, col]
+                spin           = self.config[row, col]
 
                 # Calculate ∆E
                 neighbours  = self.config[(row+1)%self.N,col] + self.config[row,(col+1)%self.N] + self.config[(row-1)%self.N,col] + self.config[row,(col-1)%self.N]         # BOTTOM + RIGHT + LEFT + TOP
-                delta_e     = 2*i*neighbours                                                                                                                                # ∆E = E_nu - E_mu = 2E_nu
+                delta_e     = 2*spin*neighbours                                                                                                                                # ∆E = E_nu - E_mu = 2E_nu
 
                 # If ∆E ≤ 0, spin flip always flipped
                 if delta_e < 0:
-                    i *= -1
+                    spin *= -1
 
                 # Else, flipped with P = exp(-∆E/kT)
                 elif rand() < np.exp(-delta_e*self.beta):
-                    i *= -1
-                self.config[row, col] = i
+                    spin *= -1
+                self.config[row, col] = spin
         return self.config
 
 ################################################### ANIMATION #######################################################
