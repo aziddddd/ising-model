@@ -1,3 +1,5 @@
+from __future__ import division
+
 import numpy as np
 from numpy.random import rand
 
@@ -6,7 +8,11 @@ from matplotlib import animation
 from IPython.display import clear_output
 
 from numba import jit
-from tqdm import tqdm
+from tqdm import tqdm_notebook as tqdm
+
+import warnings
+
+warnings.filterwarnings("ignore",category =RuntimeWarning)
 
 class IsingError(Exception):
     """ An exception class for Ising """
@@ -17,11 +23,49 @@ class Ising():
 
 ############################################### INITIALISER #####################################################
 
-    def __init__(self, N, temp, method):
+    def __init__(self, N, temp, method, temp_point, temp_range, equistep, calcstep):
         self.N          = N
-        self.beta       = 1.0/temp
         self.method     = method
-        self.config     = 2*np.random.randint(2, size=(N,N))-1  
+        self.temp_point = temp_point
+        self.beta       = 1.0/temp
+        self.config     = 2*np.random.randint(2, size=(N, N))-1
+        self.low_T      = temp_range[0]
+        self.high_T     = temp_range[1]
+
+        self.equistep   = equistep
+        self.calcstep   = calcstep
+
+        # divide by number of samples, and by system size to get intensive values
+        self.n1         = 1.0/(calcstep*N*N)
+        self.n2         = 1.0/(calcstep*calcstep*N*N)
+
+        self.energy     = 0
+        self.magnet     = 0
+        self.energy2    = 0
+        self.magnet2    = 0
+
+        self.T          = np.linspace(temp_range[0], temp_range[1], temp_point)
+        self.E          = np.zeros(temp_point)
+        self.M          = np.zeros(temp_point)
+        self.C          = np.zeros(temp_point)
+        self.X          = np.zeros(temp_point)
+
+    @jit
+    def reinitialise(self):
+        self.config     = 2*np.random.randint(2, size=(self.N, self.N))-1
+
+        self.T          = np.linspace(self.low_T, self.high_T, self.temp_point)
+        self.E          = np.zeros(self.temp_point)
+        self.M          = np.zeros(self.temp_point)
+        self.C          = np.zeros(self.temp_point)
+        self.X          = np.zeros(self.temp_point)
+
+    @jit
+    def reinitialise_properties(self):
+        self.energy     = 0
+        self.magnet     = 0
+        self.energy2    = 0
+        self.magnet2    = 0
 
 ############################################## CHOOSE METHOD #####################################################
 
@@ -70,13 +114,7 @@ class Ising():
     def Kawasaki(self):
         for i in range(self.N):
             for j in range(self.N):
-                # Choose randomly 2 dinstinct sites i & j
-                row_1, col_1     = np.random.randint(0, self.N), np.random.randint(0, self.N)
-                row_2, col_2     = np.random.randint(0, self.N), np.random.randint(0, self.N)
-
-                # Only go this function when both spin positions are the same, because jit cant do while loops.
-                if row_1 == row_2 and col_1 == col_2:
-                    ((row_1, col_1), (row_2, col_2)) = self.differentLattice()
+                ((row_1, col_1), (row_2, col_2)) = self.differentLattice()
 
                 spin_1, spin_2   = self.config[row_1, col_1], self.config[row_2, col_2]
         
@@ -106,6 +144,7 @@ class Ising():
         return self.config
 
     def differentLattice(self):
+        # Get different lattices i and j in this function, because jit cant do while loops.
         spin_1, spin_2 = 0, 0
         while spin_1 == spin_2:
             # Choose randomly 2 dinstinct sites i & j
@@ -114,16 +153,6 @@ class Ising():
 
             spin_1, spin_2   = self.config[row_1, col_1], self.config[row_2, col_2]     
         return ((row_1, col_1), (row_2, col_2))
-     
-    # @jit
-    # def calcEnergy(self, spin, row, col):
-    #     bottom  = self.config[(row+1)%self.N, col]
-    #     right   = self.config[row, (col+1)%self.N]
-    #     left    = self.config[(row-1)%self.N, col]
-    #     top     = self.config[row, (col-1)%self.N]
-
-    #     neighbours      = bottom + right + left + top
-    #     return spin*neighbours
 
 ################################################### ANIMATION #######################################################
 
@@ -150,6 +179,7 @@ class Ising():
             if i == numstep/5       :          self.plotStep( i, 4);
             if i == numstep/2       :          self.plotStep( i, 5);
             if i == numstep-1       :          self.plotStep( i, 6);
+        self.reinitialise()
                  
     @jit                    
     def plotStep(self, i, n_):
@@ -168,6 +198,7 @@ class Ising():
         for i in range(numstep):
             self.montecarlo()
             self.dynamicplotStep(i)
+        self.reinitialise()
 
     @jit                                     
     def dynamicplotStep(self, i):
@@ -179,9 +210,74 @@ class Ising():
         plt.title('Time=%d'%i); plt.axis('tight')
         plt.show()
 
-# N           = 50                              # System size
-# temp        = .4
-# method      = 'kawasaki'                      # glauber or kawasaki
+################################################## STATS ########################################################
 
-# ising_model = Ising(N, temp, method)
-# ising_model.snapshots(500)
+    @jit
+    def analyse(self):
+        for tempstep in tqdm(range(self.temp_point)):
+            self.beta = 1.0/self.T[tempstep]
+            
+            for i in range(self.equistep):         # equilibrate
+                self.montecarlo()                  # Monte Carlo moves
+
+            for i in range(self.calcstep):
+                self.montecarlo()
+                self.getStats()
+
+            self.E[tempstep] = self.n1*self.energy
+            self.M[tempstep] = self.n1*self.magnet
+            self.C[tempstep] = (self.n1*self.energy2 - self.n2*self.energy*self.energy)*self.beta*self.beta
+            self.X[tempstep] = (self.n1*self.magnet2 - self.n2*self.magnet*self.magnet)*self.beta*self.beta
+            self.reinitialise_properties()
+        self.plotStats()
+        self.reinitialise()
+
+    @jit
+    def getStats(self):
+        self.magnet += self.calcMagnetisation()
+        self.energy += self.calcEnergy()
+        self.magnet2 += self.calcMagnetisation()**2
+        self.energy2 += self.calcEnergy()**2
+
+    @jit
+    def calcMagnetisation(self):
+        return np.sum(self.config)
+     
+    @jit
+    def calcEnergy(self):
+        E_config = 0
+        for i in range(self.N):
+            for j in range(self.N):
+                spin = self.config[i, j]
+
+                bottom  = self.config[(i+1)%self.N, j]
+                right   = self.config[i, (j+1)%self.N]
+                left    = self.config[(i-1)%self.N, j]
+                top     = self.config[i, (j-1)%self.N]
+
+                neighbours  =   bottom + right + left + top
+                E_config   +=   -spin*neighbours        
+        return E_config/4
+
+    @jit
+    def plotStats(self):
+        plt.subplot(2, 2, 1 );
+        plt.scatter(self.T, self.E, marker='o', s=5, color='RoyalBlue')
+        plt.xlabel("Temperature (T)");
+        plt.ylabel("Energy ");         plt.axis('tight');
+
+        plt.subplot(2, 2, 2 );
+        plt.scatter(self.T, abs(self.M), marker='o', s=5, color='ForestGreen')
+        plt.xlabel("Temperature (T)"); 
+        plt.ylabel("Magnetization ");   plt.axis('tight');
+
+        plt.subplot(2, 2, 3 );
+        plt.scatter(self.T, self.C, marker='o', s=5, color='RoyalBlue')
+        plt.xlabel("Temperature (T)");  
+        plt.ylabel("Specific Heat ");   plt.axis('tight');   
+
+        plt.subplot(2, 2, 4 );
+        plt.scatter(self.T, self.X, marker='o', s=5, color='ForestGreen')
+        plt.xlabel("Temperature (T)"); 
+        plt.ylabel("Susceptibility");   plt.axis('tight');
+        plt.tight_layout() 
