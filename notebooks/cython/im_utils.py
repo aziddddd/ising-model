@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 from IPython.display import clear_output
 
+from numba import jit
 from tqdm import tqdm_notebook as tqdm
 
 import warnings
@@ -49,7 +50,7 @@ class Ising():
         self.C          = np.zeros(temp_point)
         self.X          = np.zeros(temp_point)
 
-
+    @jit
     def reinitialise(self):
         self.config     = 2*np.random.randint(2, size=(self.N, self.N))-1
 
@@ -59,7 +60,7 @@ class Ising():
         self.C          = np.zeros(self.temp_point)
         self.X          = np.zeros(self.temp_point)
 
-
+    @jit
     def reinitialise_properties(self):
         self.energy     = 0
         self.magnet     = 0
@@ -68,7 +69,7 @@ class Ising():
 
 ############################################## CHOOSE METHOD #####################################################
 
-
+    @jit
     def montecarlo(self):
         if self.method == 'glauber':
             self.Glauber()
@@ -80,7 +81,7 @@ class Ising():
 
 ################################################## METHOD ########################################################
 
-
+    @jit
     def Glauber(self):
         for i in range(self.N):
             for j in range(self.N):
@@ -109,7 +110,7 @@ class Ising():
                 self.config[row, col] = spin
         return self.config
 
-
+    @jit
     def Kawasaki(self):
         for i in range(self.N):
             for j in range(self.N):
@@ -173,7 +174,7 @@ class Ising():
 
 ################################################### SNAPSHOTS #######################################################
 
-
+    @jit
     def snapshots(self, numstep):
         for i in tqdm(range(numstep)):
             self.montecarlo()
@@ -185,7 +186,7 @@ class Ising():
             if i == numstep-1       :          self.plotStep( i, 6);
         self.reinitialise()
                  
-                    
+    @jit                    
     def plotStep(self, i, n_):
         X, Y = np.meshgrid(range(self.N), range(self.N))
         plt.subplot(3, 3, n_, xticklabels=[], yticklabels=[])
@@ -197,14 +198,14 @@ class Ising():
 
 ################################################### DYNAMIC PLOT #####################################################
 
-
+    @jit
     def DynamicPlot(self, numstep):
         for i in range(numstep):
             self.montecarlo()
             self.dynamicplotStep(i)
         self.reinitialise()
 
-                                     
+    @jit                                     
     def dynamicplotStep(self, i):
         X, Y = np.meshgrid(range(self.N), range(self.N))
         clear_output(wait=True)
@@ -216,7 +217,7 @@ class Ising():
 
 ################################################## STATS ########################################################
 
-
+    @jit
     def analyse(self):
         for tempstep in tqdm(range(self.temp_point)):
             self.beta = 1.0/self.T[tempstep]
@@ -236,18 +237,18 @@ class Ising():
         self.plotStats()
         self.reinitialise()
 
-
+    @jit
     def getStats(self):
         self.magnet += self.calcMagnetisation()
         self.energy += self.calcEnergy()
         self.magnet2 += self.calcMagnetisation()**2
         self.energy2 += self.calcEnergy()**2
 
-
+    @jit
     def calcMagnetisation(self):
         return np.sum(self.config)
      
-
+    @jit
     def calcEnergy(self):
         E_config = 0
         for i in range(self.N):
@@ -263,7 +264,7 @@ class Ising():
                 E_config   +=   -spin*neighbours        
         return E_config/4
 
-
+    @jit
     def plotStats(self):
         plt.subplot(2, 2, 1 );
         plt.scatter(self.T, self.E, marker='o', s=5, color='RoyalBlue')
