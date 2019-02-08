@@ -10,6 +10,7 @@ from IPython.display import clear_output
 from numba import jit
 from tqdm import tqdm_notebook as tqdm
 
+import os
 import warnings
 
 warnings.filterwarnings("ignore",category =RuntimeWarning)
@@ -235,6 +236,7 @@ class Ising():
             self.X[tempstep] = (self.n1*self.magnet2 - self.n2*self.magnet*self.magnet)*self.beta*self.beta
             self.reinitialise_properties()
         self.plotStats()
+        self.dumpData()
         self.reinitialise()
 
     @jit
@@ -266,23 +268,37 @@ class Ising():
 
     @jit
     def plotStats(self):
+        RUN_NAME = 'METHOD_{0} SIZE_{1} TEMP_{2}'.format(self.method, self.N, self.temp)
+        
         plt.subplot(2, 2, 1 );
         plt.scatter(self.T, self.E, marker='o', s=5, color='RoyalBlue')
         plt.xlabel("Temperature (T)");
-        plt.ylabel("Energy ");         plt.axis('tight');
+        plt.ylabel("Energy");         plt.axis('tight');
 
         plt.subplot(2, 2, 2 );
         plt.scatter(self.T, abs(self.M), marker='o', s=5, color='ForestGreen')
         plt.xlabel("Temperature (T)"); 
-        plt.ylabel("Magnetization ");   plt.axis('tight');
+        plt.ylabel("Magnetization");   plt.axis('tight');
 
         plt.subplot(2, 2, 3 );
         plt.scatter(self.T, self.C, marker='o', s=5, color='RoyalBlue')
         plt.xlabel("Temperature (T)");  
-        plt.ylabel("Specific Heat ");   plt.axis('tight');   
+        plt.ylabel("Specific Heat");   plt.axis('tight');   
 
         plt.subplot(2, 2, 4 );
         plt.scatter(self.T, self.X, marker='o', s=5, color='ForestGreen')
         plt.xlabel("Temperature (T)"); 
         plt.ylabel("Susceptibility");   plt.axis('tight');
-        plt.tight_layout() 
+        plt.tight_layout()
+        plt.savefig('{}/analysis_graph'.format(RUN_NAME))
+
+    @jit
+    def dumpData(self):
+        RUN_NAME = 'METHOD_{0} SIZE_{1} TEMP_{2}'.format(self.method, self.N, self.temp)
+        os.makedirs(RUN_NAME)
+        np.savetxt('{}/Temperature.txt'.format(RUN_NAME), self.T)
+        np.savetxt('{}/Energy.txt'.format(RUN_NAME), self.E)
+        np.savetxt('{}/Magnetization.txt'.format(RUN_NAME), self.M)
+        np.savetxt('{}/Specific Heat.txt'.format(RUN_NAME), self.C)
+        np.savetxt('{}/Susceptibility.txt'.format(RUN_NAME), self.X)
+
