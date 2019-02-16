@@ -17,7 +17,7 @@ import warnings
 cimport cython
 cimport numpy as np
 
-from libc.math cimport exp, sqrt, log
+from libc.math cimport exp, sqrt, log, abs
 from libc.stdlib cimport rand
 cdef extern from "limits.h":
     int RAND_MAX
@@ -34,15 +34,66 @@ cdef class IsingError(Exception):
 # Class to sample an equilibrium state of the Ising model. ( Glauber / Kawasaki )
 cdef class Ising(object):
 
-    cdef public int N, temp_point, equistep, calcstep
+    cdef public int N, temp_point, equistep, calcstep, factor
     cdef public str method, RUN_NAME
-    cdef public double low_T, high_T, beta, n1, n2, energy, magnet, energy2, magnet2
+    cdef public double low_T, high_T, beta, n1, n2
     cdef public long[:, :] config
-    cdef public np.double_t[:] T, E, M, C, X, M_err, C_err
+    cdef public np.double_t[:] T, E, M, C, X, C_err, energy, energy2, magnet, magnet2, ci_c
+
+    """
+    Class for simulating an Ising Model.
+    
+    Properties:
+    N(int)                      -   system size
+    method(str)                 -   dynamics used for simulation ( glauber or kawasaki )
+    temp_point(int)             -   number of plot points
+    config(long)                -   spin configurations
+    beta(float)                 -   1/kBT where kB = 1
+    low_T(float)                -   minimum T for plot graph
+    high_T(float)               -   maximum T for plot graph
+
+    RUN_NAME(str)               -   data filenames
+    equistep(int)               -   equilibrate sweep value
+    calcstep(int)               -   measurement sweep value
+    factor(int)                 -   actual measurement value
+
+    energy(array)               -   store the sum of energy of spin configuration
+    energy2(array)              -   store the sum of energy squared of spin configuration
+    magnet(array)               -   store the sum of magnetisation of spin configuration
+    magnet2(array)              -   store the sum of magnetisation squared of spin configuration
+
+    T                           -   store plot points for Temperature
+    E                           -   store plot points for Energy
+    M                           -   store plot points for Magnetisation
+    C                           -   store plot points for Heat Capacity
+    X                           -   store plot points for Susceptibility
+
+    C_err                       -   store plot points for Uncertainty of Heat Capacity
+    
+    Methods:
+    * reinitialise              -   restore the plotting array to initial state
+    * reinitialise_properties   -   restore the calculation array to initial state.
+    * montecarlo                -   choose dynamics for simulation
+    * Glauber                   -   Glauber dynamics
+    * Kawasaki                  -   Kawasaki dynamics
+    * differentLattice          -   get different lattices i and j if both positions are the same on first search
+    * simulate                  -   animation using FuncAnimation ( Slower as time goes on )
+    * snapshots                 -   snapshots of simulation
+    * plotStep                  -   plot subplots of snapshots graph
+    * dynamicPlot               -   animation using dynamic plotting
+    * dynamicplotStep           -   dynamic plotting
+    * analyse                   -   analyse the ising model by producing observable stats
+    * getStats                  -   obtain the sums of E, E^2, M, M^2
+    * calcHeatError             -   calculate the uncertainty ofheat capacity
+    * calcMagnetisation         -   calculate the magnetisation given a spin configuration
+    * calcEnergy                -   calculate the energy given a spin configuration
+    * plotStats                 -   plot the analysis graph
+    * dumpData                  -   save the plotting arrays
+    """
 
 ############################################### INITIALISER #####################################################
 
-    def __init__(self, int N, double temp, str method, int temp_point, tuple temp_range, int equistep, int calcstep):
+    def __init__(self, int N, int factor, double temp, str method, int temp_point, tuple temp_range, int equistep, int calcstep):
         self.N          = N
         self.method     = method
         self.temp_point = temp_point
@@ -54,15 +105,13 @@ cdef class Ising(object):
         self.RUN_NAME   = 'METHOD_{0} SIZE_{1} TEMP_{2}'.format(method, N, temp)
         self.equistep   = equistep
         self.calcstep   = calcstep
+        self.factor     = factor
 
-        # divide by number of samples, and by system size to get intensive values
-        self.n1         = 1.0/(calcstep*N*N)
-        self.n2         = 1.0/(calcstep*calcstep*N*N)
-
-        self.energy     = 0
-        self.magnet     = 0
-        self.energy2    = 0
-        self.magnet2    = 0
+        self.energy     = np.zeros(factor)
+        self.magnet     = np.zeros(factor)
+        self.energy2    = np.zeros(factor)
+        self.magnet2    = np.zeros(factor)
+        self.ci_c       = np.zeros(factor)
 
         self.T          = np.linspace(temp_range[0], temp_range[1], temp_point)
         self.E          = np.zeros(temp_point)
@@ -70,8 +119,6 @@ cdef class Ising(object):
         self.C          = np.zeros(temp_point)
         self.X          = np.zeros(temp_point)
 
-        self.M_err      = np.zeros(temp_point)
-        #self.C_array    = np.zeros(calcstep)
         self.C_err      = np.zeros(temp_point)
 
     def reinitialise(self):
@@ -83,15 +130,15 @@ cdef class Ising(object):
         self.C          = np.zeros(self.temp_point)
         self.X          = np.zeros(self.temp_point)
 
-        self.M_err      = np.zeros(self.temp_point)
-        #self.C_array    = np.zeros(self.calcstep)
         self.C_err      = np.zeros(self.temp_point)
 
     def reinitialise_properties(self):
-        self.energy     = 0
-        self.magnet     = 0
-        self.energy2    = 0
-        self.magnet2    = 0
+
+        self.energy     = np.zeros(self.factor)
+        self.magnet     = np.zeros(self.factor)
+        self.energy2    = np.zeros(self.factor)
+        self.magnet2    = np.zeros(self.factor)
+        self.ci_c       = np.zeros(self.factor)
 
 ############################################## CHOOSE METHOD #####################################################
 
@@ -101,7 +148,7 @@ cdef class Ising(object):
         elif self.method == 'kawasaki':
             self.Kawasaki()
         else:
-            raise IsingError('Unknown method given')
+            raise IsingError('Unknown method given : "{}"'.format(self.method))
         return self.config
 
 ################################################## METHOD ########################################################
@@ -136,7 +183,8 @@ cdef class Ising(object):
         return self.config
 
     def Kawasaki(self):
-        cdef int i, j, row_1, row_2, col_1, col_2, spin_1, spin_2, bottom_1, bottom_2, right_1, right_2, left_1, left_2, top_1, top_2, neighbour_1, neighbours_2, delta_e1, delta_e2, delta_e
+        cdef int i, j, row_1, row_2, col_1, col_2, spin_1, spin_2, bottom_1, bottom_2, right_1, right_2, left_1, left_2, top_1, top_2
+        cdef long delta_e1, delta_e2, delta_e
         for i in range(self.N):
             for j in range(self.N):
                 row_1, col_1     = np.random.randint(0, self.N), np.random.randint(0, self.N)
@@ -144,38 +192,64 @@ cdef class Ising(object):
 
                 spin_1, spin_2   = self.config[row_1, col_1], self.config[row_2, col_2]
                 
+                # In case lattice i and j has the same position, repeat until they are not the same.
                 if row_1 == row_2 and col_1 == col_2:
                     ((row_1, col_1), (row_2, col_2)) = self.differentLattice()
                     spin_1, spin_2   = self.config[row_1, col_1], self.config[row_2, col_2]
-        
-                # Consider the exchange as two consecutive single spin flips
-                # Finding nearest neighbour with periodic boundary condition 
-                bottom_1, bottom_2   =  self.config[(row_1+1)%self.N, col_1], self.config[(row_2+1)%self.N, col_2]
-                right_1,  right_2    =  self.config[row_1, (col_1+1)%self.N], self.config[row_2, (col_2+1)%self.N]
-                left_1,   left_2     =  self.config[(row_1-1)%self.N, col_1], self.config[(row_2-1)%self.N, col_2]
-                top_1,    top_2      =  self.config[row_1, (col_1-1)%self.N], self.config[row_2, (col_2-1)%self.N]
 
-                neighbours_1, neighbours_2  =  bottom_1 + right_1 + left_1 + top_1, bottom_2 + right_2 + left_2 + top_2
+                # If the spins has the same value, do nothing.
+                if spin_1 == spin_2:
+                    pass
 
-                # Calculate ∆E as a sum of E changes for 2 moves separately.
-                delta_e1, delta_e2   = 2*spin_1*neighbours_1, 2*spin_2*neighbours_2
-                delta_e              = delta_e1 + delta_e2
-                
-                # If E is decreased, the exchange is made
-                if delta_e < 0:
-                    spin_1 *= -1
-                    spin_2 *= -1
-                
-                 # Else, the exchange is made with P = exp(-∆E/kT)
-                elif rand() < exp(-delta_e*self.beta)*RAND_MAX:
-                    spin_1 *= -1
-                    spin_2 *= -1
-                self.config[row_1, col_1], self.config[row_2, col_2] = spin_1, spin_2                                          
+                else:
+                    # Finding nearest neighbour with periodic boundary condition
+                    bottom_1, bottom_2   =  self.config[(row_1+1)%self.N, col_1], self.config[(row_2+1)%self.N, col_2]
+                    right_1,  right_2    =  self.config[row_1, (col_1+1)%self.N], self.config[row_2, (col_2+1)%self.N]
+                    left_1,   left_2     =  self.config[(row_1-1)%self.N, col_1], self.config[(row_2-1)%self.N, col_2]
+                    top_1,    top_2      =  self.config[row_1, (col_1-1)%self.N], self.config[row_2, (col_2-1)%self.N]
+
+                    # Considering the effect of swapping between the nearest neighbour spins
+                    # If both spins in the same column & next to each other in row
+                    if ((abs(row_1 - row_2) == 1) and (col_1 == col_2)):
+                        # If spin 1 right to spin 2
+                        if row_1 - row_2 == 1:
+                            delta_e1 = (spin_1 - top_1)*(bottom_1 + right_1 + left_1)
+                            delta_e2 = (spin_2 - bottom_2)*(top_2 + right_2 + left_2)
+                        # If spin 1 left to spin 2
+                        elif row_1 - row_2 == -1:
+                            delta_e1 = (spin_1 - bottom_1)*(top_1 + right_1 + left_1)
+                            delta_e2 = (spin_2 - top_2)*(bottom_2 + right_2 + left_2)
+
+                    # If both spins in the same row & next to each other in column
+                    elif ((abs(col_1 - col_2) == 1) and (row_1 == row_2)):
+                        # If spin 1 below to spin 2
+                        if col_1 - col_2 == 1:
+                            delta_e1 = (spin_1 - left_1)*(top_1 + bottom_1 + right_1)
+                            delta_e2 = (spin_2 - right_2)*(top_2 + bottom_2 + left_2)
+                        # If spin 1 above to spin 2
+                        elif col_1 - col_2 == -1:
+                            delta_e1 = (spin_1 - right_1)*(top_1 + bottom_1 + left_1)
+                            delta_e2 = (spin_2 - left_2)*(top_2 + bottom_2 + right_2)
+            
+                    # If the chosen spins are non-nearest neighbour spins.
+                    else:
+                        delta_e1 = 2*spin_1*(bottom_1 + right_1 + left_1 + top_1)
+                        delta_e2 = 2*spin_2*(bottom_2 + right_2 + left_2 + top_2)
+
+                    delta_e = delta_e1 + delta_e2
+                    
+                    # If E is decreased, the exchange is made
+                    if delta_e < 0:
+                        self.config[row_1, col_1], self.config[row_2, col_2] = spin_2, spin_1
+                    
+                    # Else, the exchange is made with P = exp(-∆E/kT)
+                    elif rand() < exp(-delta_e*self.beta)*RAND_MAX:
+                        self.config[row_1, col_1], self.config[row_2, col_2] = spin_2, spin_1                                                             
         return self.config
 
     def differentLattice(self):
         cdef int spin_1, spin_2, row_1, row_2, col_1, col_2
-        # Get different lattices i and j in this function, because jit cant do while loops.
+        # Get different lattices i and j in this function, because this loop slows down cython. Only use when it is needed.
         spin_1, spin_2 = 0, 0
         while spin_1 == spin_2:
             # Choose randomly 2 dinstinct sites i & j
@@ -212,6 +286,7 @@ cdef class Ising(object):
             if i == numstep/2       :          self.plotStep( i, 5);
             if i == numstep-1       :          self.plotStep( i, 6);
         plt.savefig('{}/snapshots'.format(self.RUN_NAME))
+        self.reinitialise_properties()
         self.reinitialise()
                                      
     def plotStep(self, int i, int n_):
@@ -230,6 +305,7 @@ cdef class Ising(object):
         for i in range(numstep):
             self.montecarlo()
             self.dynamicplotStep(i)
+        self.reinitialise_properties()
         self.reinitialise()
                                      
     def dynamicplotStep(self, int i):
@@ -246,50 +322,41 @@ cdef class Ising(object):
     @cython.cdivision(True)
     def analyse(self):
         cdef int tempstep, i, j
-        for tempstep in tqdm(range(self.temp_point)):
+        for tempstep in tqdm(range(self.temp_point), desc='Temp point', unit='sweepstep'):
             self.beta = 1.0/self.T[tempstep]
             
-            for i in range(self.equistep):         # equilibrate
-                self.montecarlo()                  # Monte Carlo moves
+            for i in tqdm(range(self.equistep), desc='Equilibrate sweep', leave=False, unit='sweep'):         # equilibrate
+                self.montecarlo()                                                                             # Monte Carlo moves
 
-            for j in range(self.calcstep):
-                self.montecarlo()
-                self.getStats()
-            
-            self.E[tempstep] = self.n1*self.energy
-            self.M[tempstep] = self.n1*self.magnet
-            self.C[tempstep] = (self.n1*self.energy2 - self.n2*self.energy*self.energy)*self.beta*self.beta
-            self.X[tempstep] = (self.n1*self.magnet2 - self.n2*self.magnet*self.magnet)*self.beta
-            # self.C_err[tempstep] = sqrt((self.n1*np.sum(np.asarray(self.C)**2))-(self.n2*np.sum(self.C)**2))
-            """
-            self.E[tempstep] = self.energy/self.calcstep
-            self.M[tempstep] = self.magnet/self.calcstep
-            self.C[tempstep] = (self.energy2/self.calcstep - self.energy*self.energy/self.calcstep/self.calcstep)*self.beta*self.beta/self.N
-            self.X[tempstep] = (self.magnet2/self.calcstep - self.magnet*self.magnet/self.calcstep/self.calcstep)*self.beta/self.N
-            self.C_err[tempstep] = sqrt(np.sum(np.asarray(self.C)**2)-(np.sum(self.C)**2))
-            self.M_err[tempstep] = sqrt(2*(self.magnet2-self.magnet)*(-tempstep/log(self.X[tempstep]/self.X[0])/self.calcstep/self.N))
-            """
-            # self.C_err[tempstep] = sqrt(np.sum((np.asarray(self.C_array) - self.C[tempstep])**2)/self.calcstep)
+            for j in tqdm(range(self.calcstep), desc='Measurement sweep', leave=False, unit='sweep'):         # measurement
+                self.montecarlo()                                                                             # Monte Carlo moves
+                if (j%10 == 0):
+                    self.getStats(int(j/10))
+
+            self.E[tempstep] = np.sum(self.energy)/(self.factor)
+            self.M[tempstep] = np.sum(self.magnet)/(self.factor)
+            self.C[tempstep] = (np.sum(self.energy2)/(self.factor) - np.sum(self.energy)*np.sum(self.energy)/(self.factor)/(self.factor))*self.beta*self.beta/self.N
+            self.X[tempstep] = (np.sum(self.magnet2)/(self.factor) - np.sum(self.magnet)*np.sum(self.magnet)/(self.factor)/(self.factor))*self.beta/self.N
+            self.C_err[tempstep] = self.calcHeatError(tempstep)
+
             self.reinitialise_properties()
         self.dumpData() 
         self.plotStats()
         self.reinitialise()
 
-    def getStats(self):
-        self.magnet += self.calcMagnetisation()
-        self.energy += self.calcEnergy()
-        self.magnet2 += self.calcMagnetisation()**2
-        self.energy2 += self.calcEnergy()**2
+    def getStats(self, int j):
+        self.magnet[j]  = self.calcMagnetisation()
+        self.energy[j]  = self.calcEnergy()
+        self.magnet2[j] = self.calcMagnetisation()**2
+        self.energy2[j] = self.calcEnergy()**2
 
-        """c = (self.n1*self.energy2 - self.n2*self.energy*self.energy)*self.beta*self.beta
-        for idx, k in enumerate(self.C_array):
-            if j == idx:
-                pass
-            else:
-                self.C_array[idx] += (self.energy2/self.N/self.N/(self.calcstep-1) - self.energy*self.energy/self.N/self.N/(self.calcstep-1)/(self.calcstep-1))*self.beta*self.beta
-    def getC_error(self):
-        cdef double c_val
-        c_val = 0"""
+    def calcHeatError(self, int tempstep):
+        cdef double ci
+        cdef int i
+        for idx, i in enumerate(range(self.factor)):
+            ci = (np.sum(np.delete(self.energy2, [i]))/(self.factor - 1) - np.sum(np.delete(self.energy, [i]))*np.sum(np.delete(self.energy, [i]))/(self.factor - 1)/(self.factor - 1))*self.beta*self.beta/self.N
+            self.ci_c[i] = (ci - self.C[tempstep])**2
+        return sqrt((self.factor - 1)/(self.factor)*np.sum(self.ci_c))
 
     def calcMagnetisation(self):
         return np.sum(self.config)
@@ -308,31 +375,33 @@ cdef class Ising(object):
 
                 neighbours  =   bottom + right + left + top
                 E_config   +=   -spin*neighbours        
-        return E_config/4
+        return E_config
 
     def plotStats(self):
         plt.subplot(2, 2, 1 );
+        plt.plot(self.T, self.E, linewidth=0.3, color='black')
         plt.scatter(self.T, self.E, marker='o', s=20, color='RoyalBlue')
+        
         plt.xlabel("Temperature (T)");
-        plt.ylabel("Energy ");         plt.axis('tight');
+        plt.ylabel("Energy (E)");         plt.axis('tight');
 
         plt.subplot(2, 2, 2 );
-        #plt.errorbar(self.T, np.abs(self.M), yerr=self.X_err, marker='o', color='ForestGreen')
+        plt.plot(self.T, np.abs(self.M), linewidth=0.3, color='black')
         plt.scatter(self.T, np.abs(self.M), marker='o', s=20, color='ForestGreen')
         plt.xlabel("Temperature (T)"); 
-        plt.ylabel("Magnetization ");   plt.axis('tight');
+        plt.ylabel("Magnetization (M)");   plt.axis('tight');
 
         plt.subplot(2, 2, 3 );
-        plt.scatter(self.T, self.C, marker='o', s=20, color='RoyalBlue')
-        # plt.errorbar(self.T, self.C, yerr=self.C_err, fmt='.', color='ForestGreen', ecolor='black')
+        plt.plot(self.T, self.C, linewidth=0.3, color='black')
+        plt.errorbar(self.T, self.C, yerr=self.C_err, fmt='.', color='ForestGreen', ecolor='black', elinewidth=0.2, capsize=2)
         plt.xlabel("Temperature (T)");  
-        plt.ylabel("Specific Heat ");   plt.axis('tight');   
+        plt.ylabel("Specific Heat (C)");   plt.axis('tight');   
 
         plt.subplot(2, 2, 4 );
-        # plt.errorbar(self.T, self.X, yerr=self.X_err, marker='o', color='ForestGreen')
+        plt.plot(self.T, self.X, linewidth=0.3, color='black')
         plt.scatter(self.T, self.X, marker='o', s=20, color='ForestGreen')
         plt.xlabel("Temperature (T)"); 
-        plt.ylabel("Susceptibility");   plt.axis('tight');
+        plt.ylabel("Susceptibility (X)");   plt.axis('tight');
         plt.tight_layout()
         plt.savefig('{}/analysis_graph'.format(self.RUN_NAME))
 
@@ -340,6 +409,6 @@ cdef class Ising(object):
         np.savetxt('{}/Temperature.txt'.format(self.RUN_NAME), self.T)
         np.savetxt('{}/Energy.txt'.format(self.RUN_NAME), self.E)
         np.savetxt('{}/Magnetization.txt'.format(self.RUN_NAME), self.M)
-        # np.savetxt('{}/Specific Heat Error.txt'.format(self.RUN_NAME), self.C_err)
+        np.savetxt('{}/Specific Heat Error.txt'.format(self.RUN_NAME), self.C_err)
         np.savetxt('{}/Specific Heat.txt'.format(self.RUN_NAME), self.C)
         np.savetxt('{}/Susceptibility.txt'.format(self.RUN_NAME), self.X)
